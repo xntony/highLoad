@@ -1,22 +1,14 @@
 require('dotenv').config();
 const express = require('express');
-const bodyParser = require('body-parser');
 const app = express();
+const { Sequelize } = require('sequelize');
 const sequelize = require('./config/database');
 const User = require('./models/user');
-app.use(bodyParser.json());
-
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Error:', err.stack);
-  res.status(500).json({ error: 'Internal server error' });
-});
 
 // Middleware
 app.use(express.json());
 
-// Routes
+// GET all users
 app.get('/users', async (req, res) => {
   try {
     const users = await User.findAll();
@@ -27,42 +19,46 @@ app.get('/users', async (req, res) => {
   }
 });
 
-
-// Route to update the user's balance
+// PUT /users/:id/balance — update balance (increase or decrease)
 app.put('/users/:id/balance', async (req, res) => {
-  const transaction = await sequelize.transaction();
+  const transaction = await sequelize.transaction({
+    isolationLevel: Sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
+  });
 
   try {
     const userId = parseInt(req.params.id, 10);
     const amount = parseFloat(req.body.amount);
 
-    const user = await User.findByPk(userId, { transaction });
+    // Input validation
+    if (isNaN(userId) || isNaN(amount)) {
+      await transaction.rollback();
+      return res.status(400).json({ error: 'Invalid userId or amount' });
+    }
+
+    // Lock the row on READ to block concurrent conflicting transactions
+    const user = await User.findByPk(userId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
 
     if (!user) {
-      console.error(`User not found: ${userId}`);
       await transaction.rollback();
       return res.status(404).json({ error: 'User not found' });
     }
 
     const newBalance = user.balance + amount;
 
+    // Rollback first, then return error
     if (newBalance < 0) {
-      return res.status(400).json({ error: 'Balance cannot go negative' });
+      await transaction.rollback();
+      return res.status(400).json({ error: 'Insufficient funds' });
     }
 
-    // Update the balance with locking
-    await user.update(
-      { balance: newBalance },
-      {
-        where: { id: userId },
-        transaction,
-        lock: transaction.LOCK.UPDATE
-      }
-    );
+    await user.update({ balance: newBalance }, { transaction });
     await transaction.commit();
 
-    console.log(`Balance updated successfully for user ${userId}`);
-    res.status(200).json({ message: 'Balance updated successfully' });
+    console.log(`Balance updated for user ${userId}: ${newBalance}`);
+    res.status(200).json({ message: 'Balance updated successfully', balance: newBalance });
   } catch (error) {
     await transaction.rollback();
     console.error('Error updating balance:', error);
@@ -70,26 +66,23 @@ app.put('/users/:id/balance', async (req, res) => {
   }
 });
 
-
-// Route to reset user balance (for testing purposes)
+// GET /reset — reset user 1 balance to 10000 (testing only)
 app.get('/reset', async (req, res) => {
-  const userId = 1;
-
   try {
-    const user = await User.findByPk(userId);
-
-    if (!user) {
-      console.error(`User with ID ${userId} not found`);
-      return res.status(404).json({ error: 'User not found' });
-    }
-
+    const user = await User.findByPk(1);
+    if (!user) return res.status(404).json({ error: 'User not found' });
     await user.update({ balance: 10000 });
-
-    return res.status(200).json({ message: 'User balance reset to 10000 successfully', balance: 10000 });
+    res.status(200).json({ message: 'Balance reset to 10000', balance: 10000 });
   } catch (error) {
-    console.error('Error resetting user balance:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    console.error('Error resetting balance:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// Error handling middleware — must be AFTER all routes
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err.stack);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 // Start server
