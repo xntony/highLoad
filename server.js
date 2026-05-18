@@ -1,11 +1,19 @@
 const express = require('express');
 const path = require('path');
+const cookieParser = require('cookie-parser');
+const csrf = require('csurf');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(cookieParser());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+const csrfProtection = csrf({ cookie: true });
+app.get('/api/csrf-token', csrfProtection, (req, res) => {
+  res.json({ csrfToken: req.csrfToken() });
+});
 
 // In-memory mock state
 let account = {
@@ -46,7 +54,7 @@ app.get('/api/account', (req, res) => {
 });
 
 // ── POST /api/send ───────────────────────────────────────────────
-app.post('/api/send', (req, res) => {
+app.post('/api/send', csrfProtection, (req, res) => {
   const { recipient, amount, note } = req.body;
   if (!recipient || !amount || isNaN(amount) || Number(amount) <= 0)
     return res.status(400).json({ success: false, message: 'Invalid recipient or amount.' });
@@ -65,7 +73,7 @@ app.post('/api/send', (req, res) => {
 });
 
 // ── POST /api/receive ────────────────────────────────────────────
-app.post('/api/receive', (req, res) => {
+app.post('/api/receive', csrfProtection, (req, res) => {
   const { sender, amount } = req.body;
   if (!sender || !amount || isNaN(amount) || Number(amount) <= 0)
     return res.status(400).json({ success: false, message: 'Invalid sender or amount.' });
@@ -81,7 +89,7 @@ app.post('/api/receive', (req, res) => {
 });
 
 // ── POST /api/topup ──────────────────────────────────────────────
-app.post('/api/topup', (req, res) => {
+app.post('/api/topup', csrfProtection, (req, res) => {
   const { cardId, amount, method } = req.body;
   if (!amount || isNaN(amount) || Number(amount) <= 0)
     return res.status(400).json({ success: false, message: 'Invalid amount.' });
@@ -96,7 +104,7 @@ app.post('/api/topup', (req, res) => {
 });
 
 // ── POST /api/freeze ─────────────────────────────────────────────
-app.post('/api/freeze', (req, res) => {
+app.post('/api/freeze', csrfProtection, (req, res) => {
   const { cardId } = req.body;
   const card = account.cards.find(c => c.id === parseInt(cardId));
   if (!card) return res.status(404).json({ success: false, message: 'Card not found.' });
