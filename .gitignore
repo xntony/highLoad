@@ -1,3 +1,4 @@
+.gitignore
 .env
 audit-tools
 node_modules
